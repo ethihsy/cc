@@ -5,84 +5,82 @@
 #include <random>
 #include <fstream>
 #include <cstring>
+
 using namespace std;
 
 double alpha = 3e-5;
 double _gamma = 0.9;
 
-const int max_epoch = 200;
-const int batch = 4;
+const int max_epoch = 1;
+const int batch = 1;
 const int n_s = 1;
 int m_s = 0;
 
 template <typename T, typename Ts>
-void sample(T &y, Ts &s, int m){
+void sample(T &h, Ts &s){
+	int m = sizeof(h)/8;
 	switch(m_s){
 		case 0:
-			double u, p1, p0;
-			for (int k=0; k<n_s; k++){
-				for (int i=0; i<batch; i++){
-				 	for (int j=0; j<m; j++){
-						u = -log( -log((double)rand()/RAND_MAX));	p1 = exp( log(y[i][j])+u );
-						u = -log( -log((double)rand()/RAND_MAX));	p0 = exp( log(1.-y[i][j])+u );
-						s[k][i][j] = p1 / (p1+p0);
-					}
-					s[k][i][m] = 1;
-				}
-			}
+			for (int i=0; i<m; i++)
+				s[i] = h[i];
+			s[m] = 1;
 			break;
 		case 1:
-			for (int k=0; k<n_s; k++){
-				for (int i=0; i<batch; i++){
-					for (int j=0; j<m; j++)
-						s[k][i][j] = (double)rand()/RAND_MAX > y[i][j] ? 1 : 0;
-					s[k][i][m] = 1;
-				}
+			double u, p1, p0;
+			for (int i=0; i<m; i++){
+				u = -log( -log((double)rand()/RAND_MAX));	p1 = exp( log(h[i])+u );
+				u = -log( -log((double)rand()/RAND_MAX));	p0 = exp( log(1.-h[i])+u );
+				s[i] = p1 / (p1+p0);
 			}
+			s[m] = 1;
+			break;
+		case 2:
+				for (int j=0; j<m; j++)
+					s[j] = (double)rand()/RAND_MAX > h[j] ? 1 : 0;
+				s[m] = 1;
 			break;
 		default:	cout << "sample wrong" << endl;
 	}
 }
-template<typename T, typename T2>
-void a_sample(T &ary, T &s, T &y, T &ay, T2 &yy, int m){
+template<typename Th, typename Ts, typename T2>
+void a_sample(Th &h, Ts &s, Ts &as, Th &ah, T2 &yy){
+	int m = sizeof(ah)/8;
 	switch(m_s){
 		case 0:
-			for (int i=0; i<batch; i++)
-				for (int j=m-1; j>=0; j--)
-					ay[i][j] += ary[i][j] * s[i][j]*(1.-s[i][j])/y[i][j];
+			for (int i=0; i<m; i++)
+				ah[i] += as[i];
 			break;
 		case 1:
-			for (int i=0; i<batch; i++)
-				for (int j=m-1; j>=0; j--)
-					ay[i][j] *= yy[i][j] / y[i][j];
+			for (int i=0; i<m; i++)
+				ah[i] += as[i] * s[i]*(1.-s[i])/h[i];
+			break;
+		case 2:
+			for (int i=m-1; i>=0; i--)
+				ah[i] *= yy[i] / h[i];
 			break;
 		default:	cout << "a_sample wrong" << endl;
 	}
 }
 template<typename Tx, typename Tw, typename Ty>
-void feed_forward(Tx &x, int itr, Tw &w, Ty &rx, Ty &y, int n, int m, bool s){
+void feed_forward(Tx &x, Tw &w, Ty &rx, Ty &y, bool s){
 	memset(rx, 0, sizeof(rx));
-	for (int k=0; k<batch; k++){
-		for (int i=0; i<m; i++){
-			for (int j=0; j<n; j++)
-				rx[k][i] += x[k+itr][j] * w[i][j];
-			rx[k][i] = 1. / (1.+exp(-rx[k][i]));
-		}
-		rx[k][m] = 1;
+	int n=sizeof(x)/8, m=sizeof(y)/8;
+	for (int i=0; i<m; i++){
+		for (int j=0; j<n; j++)
+			rx[i] += x[j] * w[i][j];
+		rx[i] = 1. / (1.+exp(-rx[i]));
 	}
 	if (s){
-		for (int k=0; k<batch; k++)
-			for (int i=0; i<m; i++)
-				y[k][i] += rx[k][i] / n_s;
+		for (int i=0; i<m; i++)
+			y[i] += rx[i] / (double)n_s;
 	}
 }
 template<typename T>
-void loss_function(T &y, T &l, T &ay, int m){
-	for (int i=0; i<batch; i++){
-		for (int j=0; j<m; j++){
-			ay[i][j] = -ay[i][j] * (l[i][j]/y[i][j] - (1.-l[i][j])/(1.-y[i][j])) / n_s;
-			l[i][j] = -(l[i][j]*log(y[i][j]) + (1.-l[i][j])*log(1.-y[i][j]));
-		}
+void loss_function(T &y, T &l, T &ay){
+	int m = sizeof(y)/8;
+	for (int i=0; i<m; i++){
+		ay[i] = -ay[i] * (l[i]/y[i] - (1.-l[i])/(1.-y[i])) / (double)n_s;
+		l[i] = -(l[i]*log(y[i]) + (1.-l[i])*log(1.-y[i]));
 	}
 }
 template<typename T>
@@ -96,22 +94,19 @@ void optimizer(T &w, T &aw, T &vaw, int n, int m){
 	}
 }
 template<typename Tx, typename Tw, typename Ty>
-void back_prop(Tx &x, int itr, Tw &w, Ty &y, Ty &ay, Tw &aw, bool bp, Tx &ax, Tw &vaw, int n, int m){
-	double ar;
-	for (int k=0; k<batch; k++){
-		for (int i=m-1; i>=0; i--){
-			ar = ay[k][i]*y[k][i] * (1.-y[k][i]);
-			for (int j=n-1; j>=0; j--)
-				aw[i][j] += ar * x[k+itr][j];
-		}
+void back_prop(Tx &x, Tw &w, Ty &rx, Ty &ay, Tw &aw, bool bp, Tx &ax){
+	double ar, m=sizeof(ay)/8, n=sizeof(ax)/8;
+	for (int i=0; i<m; i++){
+		ar = ay[i] * rx[i]*(1.-rx[i]);
+		for (int j=0; j<n; j++)
+			aw[i][j] += ar * x[j];
 	}
 	if (bp){
-		for (int k=0; k<batch; k++){
-			for (int i=m-1; i>=0; i--){
-				ar = ay[k][i]*y[k][i] * (1.-y[k][i]);
-				for (int j=n-1; j>=0; j--)
-					ax[k][j] +=  ar * w[i][j];
-			}
+		memset(&ax[0], 0, n*sizeof(ax[0]));
+		for (int i=0; i<m; i++){
+			ar = ay[i] * rx[i]*(1.-rx[i]);
+			for (int j=0; j<n; j++)
+				ax[j] +=  ar * w[i][j];
 		}
 	}
 }
