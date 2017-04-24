@@ -5,6 +5,7 @@
 #include <random>
 #include <fstream>
 #include <cstring>
+#include <functional>
 #include <boost/variant.hpp>
 #include <boost/variant/multivisitors.hpp>
 #include <boost/variant/variant_fwd.hpp>
@@ -16,10 +17,11 @@ using namespace std;
 const int v_d = 392;
 const int h_d = 200;
 const int n_s = 1;
-const int m_s = 1;
+enum _sample{pass, gumbel, LR};
+_sample m_s = gumbel;
 
-const int max_epoch = 1;
-const int batch = 1;
+const int max_epoch = 200;
+const int batch = 40;
 double alpha = 3e-5;
 double _gamma = 0.9;
 
@@ -51,7 +53,7 @@ struct mtx_w{
 	double _a[r][c+1];
 	double _m[r][c+1];
 	
-	void init(){
+	mtx_w(){
 		for (int i=0; i<r; i++)
 			for (int j=0; j<c+1; j++)
 				_v[i][j] = (double)rand()/RAND_MAX - 0.5;
@@ -62,8 +64,6 @@ struct mtx_w{
 	}
 };
 
-
-//	0_pass	1_gumbel	2_likelihood
 template <typename T, typename Ts>
 void sample(T &h, Ts &sh){
 	switch(m_s){
@@ -101,6 +101,7 @@ void sample(T &h, Ts &sh){
 		default:	cout << "sample wrong" << endl;
 	}
 }
+
 template<typename Tx, typename Tw, typename Ty>
 void feed_forward(Tx &x, Tw &w, Ty &y){
 	int n=sizeof(w[0])/sizeof(double);
@@ -113,9 +114,8 @@ void feed_forward(Tx &x, Tw &w, Ty &y){
 		}
 	}
 }
-/*
 template<typename Tx, typename Tw, typename Ty, typename Tsy>
-void s_feed_forward(T &x, T &w, T &y, T &sy){
+void feed_forward(Tx &x, Tw &w, Ty &y, Tsy &sy){
 	int n=sizeof(w[0])/sizeof(double);
 	int m=sizeof(w)/sizeof(double)/n;
 	for (int k=0; k<batch; k++){
@@ -129,24 +129,7 @@ void s_feed_forward(T &x, T &w, T &y, T &sy){
 		}
 	}
 }
-*/
 
-struct s_feed_forward: public boost::static_visitor<>{
-	template<typename Tx, typename Tw, typename Ty>
-	void operator()(Tx &x, Tw &w, Ty &y){
-	int n=sizeof(w[0])/sizeof(double);
-	int m=sizeof(w)/sizeof(double)/n;
-	for (int k=0; k<batch; k++){
-		for (int i=0; i<m; i++){
-			for (int l=0; l<n_s; l++){
-				for (int j=0; j<n; j++)
-					sy[k][l][i] += x[k][l][j] * w[i][j];
-				sy[k][l][i] = 1.0 / (1.0+exp(-sy[k][l][i]));
-				y[k][i] += sy[k][l][i]/n_s;
-			}
-		}
-	}
-}
 template<typename T, typename Tl>
 void loss_function(T &y, T &ay, Tl &l){
 	int n=sizeof(y)/sizeof(double)/batch;
@@ -210,8 +193,8 @@ void s_back_prop(Ty &ay, Ty &y, Tw &aw, Tw &w, Tx &ax, Tx &x){
 	}
 }
 */
-template<typename Ts, typename T>
-void a_sample(Ts &ash, Ts &sh, T &ah, T &h){
+template<typename Ts, typename T, typename Ty>
+void a_sample(Ts &ash, Ts &sh, T &ah, T &h, Ty &y){
 	switch(m_s){
 		case 0:
 			for (int k=0; k<batch; k++)
@@ -225,14 +208,12 @@ void a_sample(Ts &ash, Ts &sh, T &ah, T &h){
 					for (int i=0; i<h_d; i++)
 						ah[k][i] += ash[k][j][i] * sh[k][j][i]*(1.-sh[k][j][i])/h[k][i];
 			break;
-			/*
 		case 2:
 			for (int k=0; k<batch; k++)
 				for (int j=0; j<n_s; j++)
 					for (int i=0; i<h_d; i++)
 						ah[k][i] *= y[k][i] / h[k][i];
 			break;
-			*/
 		default:	cout << "a_sample wrong" << endl;
 	}
 }
