@@ -5,6 +5,7 @@
 #include <random>
 #include <fstream>
 #include <cstring>
+#include <iomanip>
 //#include <opencv2/core/core.hpp>
 //#include <opencv2/highgui/highgui.hpp>
 using namespace std;
@@ -14,64 +15,63 @@ const int v_d = 392;
 const int h_d = 200;
 const int n_s = 1;
 enum _sample{pass, gumbel, LR};
-_sample m_s= gumbel;
+_sample m_s= pass;
 
-const int max_epoch = 500;
-const int batch = 40;
+const int max_epoch = 1;
+const int batch = 1;
 double alpha = 3e-5;
 double _gamma = 0.9;
+
+typedef vector<vector<double>> MTX;
 
 class Layer{
 	public:
 		Layer(int m, int n) : _v(m, vector<double>(n)), _a(m, vector<double>(n)){}
-		vector<vector<double>> _v;
-		vector<vector<double>> _a;
-		vector<vector<double>> _m;
-		vector<vector<vector<double>>> _s;
-		vector<vector<vector<double>>> _as;
-		vector<vector<vector<double>>> _sy;
-		vector<vector<vector<double>>> _asy;
-
-		void init_w(){
-			for (int i=0; i<_v.size(); i++)
-				for (int j=0; j<_v.front().size(); j++)
-					_v[i][j] = (double)rand()/RAND_MAX - 0.5;
-			_m.assign(_v.size(), vector<double>(_v.front().size(), 0));
-		}
-		void init_s(int m, int n){
-			_s.assign(batch, vector<vector<double>>(n_s, vector<double>(n)));
-			_as.assign(batch, vector<vector<double>>(n_s, vector<double>(n)));
-			_sy.assign(batch, vector<vector<double>>(n_s, vector<double>(m)));
-			_asy.assign(batch, vector<vector<double>>(n_s, vector<double>(m)));
-		}
 		void reset(){
 			for (int i=0; i<_v.size(); i++){
 				fill(_v[i].begin(), _v[i].end(), 0);
 				fill(_a[i].begin(), _a[i].end(), 0);
-				if (_s.size()){
-					for (int j=0; j<n_s; j++){
-						fill(_sy[i][j].begin(), _sy[i][j].end(), 0);
-						fill(_as[i][j].begin(), _as[i][j].end(), 0);
-					}
+			}
+		}
+		void seed(){
+			for (int i=0; i<_a.size(); i++)
+				fill(_a[i].begin(), _a[i].end(), 1);
+		}
+		MTX _v, _a;
+};
+class Weights{
+	public:
+		Weights(int m, int n):	_v(m, vector<double>(n)), _a(m, vector<double>(n)), _m(m, vector<double>(n, 0)){}
+		void init(){
+			for (int i=0; i<_v.size(); i++){
+				fill(_m[i].begin(), _m[i].end(), 0);
+				for (int j=0; j<_v.front().size(); j++){
+					_v[i][j] = (double)rand()/RAND_MAX - 0.5;
+
 				}
 			}
 		}
-		void reset_a(int sd){
-			for (int i=0; i<_v.size(); i++)
-				fill(_a[i].begin(), _a[i].end(), sd);
+		void reset(){
+			for (int i=0; i<_a.size(); i++)
+					fill(_a[i].begin(), _a[i].end(), 0);
 		}
+		double norm(){
+			double a = 0;
+			for (int i=0; i<_a.size(); i++)
+				for (int j=0; j<_a.front().size(); j++)
+					a += _a[i][j] * _a[i][j];
+			return sqrt(a);
+		}
+		MTX _v, _a, _m;
 };
-
-//	0_pass	1_gumbel	2_likelihood
-template <typename T, typename Ts>
-void sample(T &h, Ts &sh){
+void sample(MTX &h, MTX &sh){
 	switch(m_s){
 		case 0:
 			for (int k=0; k<batch; k++){
 				for (int j=0; j<n_s; j++){
 					for (int i=0; i<h_d; i++)
-						sh[k][j][i] = h[k][i];
-					sh[k][j][h_d] = 1;
+						sh[k][i+j*(h_d+1)] = h[k][i];
+					sh[k][(j+1)*(h_d+1)-1] = 1;
 				}
 			}
 			break;
@@ -81,10 +81,10 @@ void sample(T &h, Ts &sh){
 				for (int j=0; j<n_s; j++){
 					for (int i=0; i<h_d; i++){
 						u = -log( -log((double)rand()/RAND_MAX));	p1 = exp( log(h[k][i])+u );
-						u = -log( -log((double)rand()/RAND_MAX));	p0 = exp( log(1.-h[k][i])+u );
-						sh[k][j][i] = p1 / (p1+p0);
+						u = -log( -log((double)rand()/RAND_MAX));	p0 = exp( log(1.0-h[k][i])+u );
+						sh[k][i+j*(h_d+1)] = p1 / (p1+p0);
 					}
-					sh[k][j][h_d] = 1;
+					sh[k][(j+1)*(h_d+1)-1] = 1;
 				}
 			}
 			break;
@@ -92,16 +92,13 @@ void sample(T &h, Ts &sh){
 			for (int k=0; k<batch; k++){
 				for (int j=0; j<n_s; j++){
 					for (int i=0; i<h_d; i++)
-						sh[k][j][i] = (double)rand()/RAND_MAX > h[k][i] ? 1 : 0;
-					sh[k][j][h_d] = 1;
+						sh[k][i+j*(h_d+1)] = (double)rand()/RAND_MAX > h[k][i] ? 1 : 0;
+					sh[k][(j+1)*(h_d+1)-1] = 1;
 				}
 			}
-			break;
-		default:	cout << "sample wrong" << endl;
 	}
 }
-template<typename Tx, typename Tw, typename Ty>
-void feed_forward(Tx &x, Tw &w, Ty &y){
+void feed_forward(MTX &x, MTX &w, MTX &y){
 	for (int k=0; k<batch; k++){
 		for (int i=0; i<w.size(); i++){
 			for (int j=0; j<w.front().size(); j++)
@@ -110,21 +107,22 @@ void feed_forward(Tx &x, Tw &w, Ty &y){
 		}
 	}
 }
-template<typename Tx, typename Tw, typename Ty, typename Tsy>
-void feed_forward(Tx &x, Tw &w, Ty &y, Tsy &sy){
+void feed_forward(MTX &x, MTX &w, MTX &y, MTX &sy){
+	int m = w.size();
+	int n = w.front().size();
+
 	for (int k=0; k<batch; k++){
-		for (int i=0; i<w.size(); i++){
+		for (int i=0; i<m; i++){
 			for (int l=0; l<n_s; l++){
-				for (int j=0; j<w.front().size(); j++)
-					sy[k][l][i] += x[k][l][j] * w[i][j];
-				sy[k][l][i] = 1.0 / (1.0+exp(-sy[k][l][i]));
-				y[k][i] += sy[k][l][i]/n_s;
+				for (int j=0; j<n; j++)
+					sy[k][i+l*m] += x[k][j+l*n] * w[i][j];
+				sy[k][i+l*m] = 1.0 / (1.0+exp(-sy[k][i+l*m]));
+				y[k][i] += sy[k][i+l*m]/n_s;
 			}
 		}
 	}
 }
-template<typename T, typename Tl>
-void loss_function(T &y, T &ay, Tl &l){
+void loss_function(MTX &y, MTX &ay, MTX &l){
 	for (int k=0; k<batch; k++){
 		for (int i=0; i<y.front().size(); i++){
 			ay[k][i] = -ay[k][i] * (l[k][i]/y[k][i] - (1.0-l[k][i])/(1.0-y[k][i]));
@@ -132,8 +130,7 @@ void loss_function(T &y, T &ay, Tl &l){
 		}
 	}
 }
-template<typename Tx, typename Tw, typename Ty>
-void back_prop_w(Ty &ay, Ty &y, Tw &aw, Tx &x){ 
+void back_prop_w(MTX &ay, MTX &y, MTX &aw, MTX &x){
 	for (int k=0; k<batch; k++){
 		for (int i=0; i<aw.size(); i++){
 			ay[k][i] *= y[k][i]*(1.0-y[k][i]);
@@ -142,47 +139,44 @@ void back_prop_w(Ty &ay, Ty &y, Tw &aw, Tx &x){
 		}
 	}
 }
-template<typename Tx, typename Tw, typename Ty, typename Tsy>
-void back_prop(Ty &ay, Ty &y, Tw &aw, Tw &w, Tx &ax, Tx &x, Tsy &asy, Tsy &sy){ 
+void back_prop(MTX &ay, MTX &y, MTX &asy, MTX &sy, MTX &aw, MTX &w, MTX &ax, MTX &x){
+	int m = aw.size();
+	int n = aw.front().size();
+
 	for (int k=0; k<batch; k++){
-		for (int i=0; i<aw.size(); i++){
+		for (int i=0; i<m; i++){
 			for (int l=0; l<n_s; l++){
-				asy[k][l][i] = ay[k][i] / n_s;
-				asy[k][l][i] *= sy[k][l][i] * (1-sy[k][l][i]);
-				for (int j=0; j<aw.front().size(); j++){
-					aw[i][j] += asy[k][l][i] * x[k][l][j];
-					ax[k][l][j] += asy[k][l][i] * w[i][j];
+				asy[k][i+l*m] = ay[k][i]/n_s * sy[k][i+l*m]*(1.0-sy[k][i+l*m]);
+				for (int j=0; j<n; j++){
+					aw[i][j] += asy[k][i+l*m] * x[k][j+l*n];
+					ax[k][j+l*n] += asy[k][i+l*m] * w[i][j];
 				}
 			}
 		}
 	}
 }
-template<typename Ts, typename T, typename Ty>
-void a_sample(Ts &ash, Ts &sh, T &ah, T &h, Ty &y){
+void a_sample(MTX &ash, MTX &sh, MTX &ah, MTX &h, MTX &y){
 	switch(m_s){
 		case 0:
 			for (int k=0; k<batch; k++)
 				for (int j=0; j<n_s; j++)
 					for (int i=0; i<h_d; i++)
-						ah[k][i] += ash[k][j][i];
+						ah[k][i] += ash[k][i+j*(h_d+1)];
 			break;
 		case 1:
 			for (int k=0; k<batch; k++)
 				for (int j=0; j<n_s; j++)
 					for (int i=0; i<h_d; i++)
-						ah[k][i] += ash[k][j][i] * sh[k][j][i]*(1.-sh[k][j][i])/h[k][i];
+						ah[k][i] += ash[k][i+j*(h_d+1)] * sh[k][i+j*(h_d+1)]*(1.0-sh[k][i+j*(h_d+1)])/h[k][i];
 			break;
 		case 2:
 			for (int k=0; k<batch; k++)
 				for (int j=0; j<n_s; j++)
 					for (int i=0; i<h_d; i++)
 						ah[k][i] *= y[k][i] / h[k][i];
-			break;
-		default:	cout << "a_sample wrong" << endl;
 	}
 }
-template<typename T>
-void optimizer(T &w, T &aw, T &mw){
+void optimizer(MTX &w, MTX &aw, MTX &mw){
 	for (int i=0; i<w.size(); i++){
 		for (int j=0; j<w.front().size(); j++){
 			aw[i][j] /= batch;
@@ -191,31 +185,27 @@ void optimizer(T &w, T &aw, T &mw){
 		}
 	}
 }
-template<typename T>
-void write_w(T &w, int n){
-	fstream fs;
+void write_w(MTX &w, int n){
 	string c;
 	switch(n){
 		case 0:
 			c="w_xh1.txt";
 			break;
-		case 2:
+		case 1:
 			c="w_h1h2.txt";
 			break;
-		case 4:
+		case 2:
 			c="w_h2y.txt";
 	}
-	fs.open(c, ios::out);
+	ofstream fs(c);
 	for (int i=0; i<w.size(); i++)
 		for (int j=0; j<w.front().size(); j++)
-			fs << w[i][j] << " ";
+			fs << setprecision(17) << fixed << w[i][j] << " ";
 	fs.close();
 }
-template<typename T>
-void read_w(T &w, int n, int m, string c){
+void read_w(MTX &w, int n, int m, string c){
 	char buf[n*m*50], *s;
-	fstream fs;
-	fs.open(c, ios::in);
+	ifstream fs(c);
 	fs.read(buf, sizeof(buf));
 	
 	s = strtok(buf," ");
@@ -235,43 +225,41 @@ void check_data(T &x, int q){
 		cout << endl;
 	}
 }
-template<typename T, typename T2, typename T3>
-void check_gd(int lev, int pi, int pj, vector<Layer> &nn, T &x, T2 &data, T3 &loss){
-	cout << nn[lev]._a[pi][pj] << endl;;
+void check_gd(int lev, int pi, int pj, vector<Layer> &nn, vector<Weights> &ww, MTX &x, MTX &data, MTX &loss){
+	cout << ww[lev]._a[pi][pj] << endl;;
 	double hh=1e-6;
-//	double yy=loss[0][pi];
-	double yy[v_d];	for (int i=0; i<v_d; i++)	yy[i]=loss[0][i];
-
-	for (int i=1; i<nn.size(); i+=2)
+	double yy[v_d];	
+	for (int i=0; i<v_d; i++)	
+		yy[i]=loss[0][i];
+//	------------------------------------------------------------------------------	
+	for (int i=0; i<nn.size(); i++)
 		nn[i].reset();
-	for (int i=0; i<nn.size(); i+=2)
-		nn[i].reset_a(0);
-	nn.back().reset_a(1);
-
+	nn.back().seed();
+	for (int i=0; i<ww.size(); i++)
+		ww[i].reset();
 	for (int i=0; i<batch; i++){
 		x[i][v_d] = 1;
-		for (int j=0; j<v_d; j++){
-			x[i][j] = (double)data[i][j];
+		for (int j=0; j<v_d; j++)
 			loss[i][j] = (double)data[i][j+v_d];
-		}
 	}
-	nn[0].init_w();
-	nn[2].init_w();
-	nn[4].init_w();
-
-	nn[lev]._v[pi][pj] -= hh;
-	feed_forward(x, nn[0]._v, nn[1]._v);
-	for (int i=1; i<5; i+=2){
-		sample(nn[i]._v, nn[i]._s);
-		feed_forward(nn[i]._s, nn[i+1]._v, nn[i+2]._v, nn[i]._sy);
+	ww[lev]._v[pi][pj] -= hh;
+	feed_forward(x, ww[0]._v, nn[0]._v);
+	for (int i=0; i<5; i+=3){
+		sample(nn[i]._v, nn[i+1]._v);
+		feed_forward(nn[i+1]._v, ww[(i+3)/3]._v, nn[i+3]._v, nn[i+2]._v);
 	}
 	loss_function(nn.back()._v, nn.back()._a, loss);
-	
-	for (int i=0; i<v_d; i++)	yy[i] -= loss[0][i];
-	for (int i=1; i<v_d; i++)	yy[0] += yy[i];
-	
-//	cout << (yy-loss[0][pi]) / hh;
-	cout << yy[0]/hh << endl;
+//	------------------------------------------------------------------------------	
+	if (lev==ww.size()-1)
+		cout << (yy[pi]-loss[0][pi]) / hh;
+	else{
+		for (int i=0; i<v_d; i++)
+			yy[i]-=loss[0][i];
+		for (int i=1; i<v_d; i++) 
+			yy[0] += yy[i];
+		cout << yy[0]/hh << endl;
+	}
+	char zz;	cin >> zz;
 }
 template<typename T>
 void test(T &data, vector<Layer> &nn){
