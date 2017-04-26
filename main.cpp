@@ -7,15 +7,16 @@
 #include <omp.h>
 #include "mnist/include/mnist/mnist_reader.hpp"
 #include "mnist/include/mnist/mnist_utils.hpp"
-#include "f.hpp"
+#include "n.hpp"
+#include "u.hpp"
 
 using namespace std;
 
 int main(){
    auto dataset = mnist::read_dataset<std::vector, std::vector, uint8_t, uint8_t>();
    binarize_dataset(dataset);
-   //srand(time(NULL));
-   //check_data(dataset.training_images, 11);
+   srand(time(NULL));
+
    MTX x(batch, vector<double>(v_d+1));
    vector<Layer> nn;
    nn.push_back(Layer(batch, h_d));             //   h1
@@ -40,7 +41,7 @@ int main(){
    ofstream fs("train_loss.txt");
 //   ------------------------------------------------------------------------------   
    for (int epoch=0; epoch<max_epoch; epoch++){
-//      shuffle(begin(dataset.training_images), end(dataset.training_images), default_random_engine(time(NULL)));
+      shuffle(begin(dataset.training_images), end(dataset.training_images), default_random_engine(time(NULL)));
       memset(ll, 0, sizeof(ll));
       memset(gg, 0, sizeof(gg));
 
@@ -57,21 +58,22 @@ int main(){
                loss[i][j] = (double)dataset.training_images[i+itr][j+v_d];
             }
          }
-         feed_forward(x, ww[0]._v, nn[0]._v);
+         feed_forward(x, ww[0], nn[0]);
          for (int i=0; i<5; i+=3){
-            sample(nn[i]._v, nn[i+1]._v);
-            feed_forward(nn[i+1]._v, ww[(i+3)/3]._v, nn[i+2]._v, nn[i+3]._v);
+            sample(nn[i], nn[i+1]);
+            feed_forward(nn[i+1]._v, ww[(i+3)/3], nn[i+2], n_s);
+            expect(nn[i+2], nn[i+3], n_s);
          }
-         loss_function(nn.back()._v, nn.back()._a, loss);
+         loss_function(nn.back(), loss);
 
          for (int i=nn.size()-1; i>2; i-=3){
-            back_prop(nn[i]._a, nn[i]._v, nn[i-1]._a, nn[i-1]._v, ww[i/3]._a, ww[i/3]._v, nn[i-2]._a, nn[i-2]._v);
-            a_sample(nn[i-2]._a, nn[i-2]._v, nn[i-3]._a, nn[i-3]._v, nn[i-1]._a, nn[i-1]._v);
+            back_prop(nn[i], nn[i-1], ww[i/3], nn[i-2]); 
+            a_sample(nn[i-2], nn[i-3], nn[i-1]);
          }
-         back_prop_w(nn[0]._a, nn[0]._v, ww[0]._a, x);
+         back_prop_w(nn[0], ww[0], x);
    //      check_gd(2,2,0, nn, ww, x, dataset.training_images,loss);
          for (int i=0; i<ww.size(); i++)
-            optimizer(ww[i]._v, ww[i]._a, ww[i]._m);
+            optimizer(ww[i]);
 
          for (int i=0; i<batch; i++)
             for (int j=0; j<v_d; j++)
@@ -87,7 +89,7 @@ int main(){
    }
    fs.close();
    for (int i=0; i<ww.size(); i++)
-      write_w(ww[i]._v, i);
+      write_w(ww[i], i);
 
 //   test(dataset.test_images);
 
