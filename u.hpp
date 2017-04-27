@@ -1,4 +1,5 @@
 #include <fstream>
+#include <iomanip>
 
 void write_w(Weights &w, int n){
    string c;
@@ -17,7 +18,7 @@ void write_w(Weights &w, int n){
       for (int j=0; j<w._v.front().size(); j++)
          fs << setprecision(17) << fixed << w._v[i][j] << " ";
    fs.close();
-}
+}/*
 void read_w(MTX &w, int n, int m, string c){
    char buf[n*m*50], *s;
    ifstream fs(c);
@@ -82,7 +83,7 @@ void check_gd(int lev, int pi, int pj, vector<Layer> &nn, vector<Weights> &ww, M
       cout << yy[0]/hh << endl;
    }
    char zz;   cin >> zz;
-}/*
+}
 template<typename T>
 void test(T &data, vector<Layer> &nn){
    int max_itr = data.size()/batch;

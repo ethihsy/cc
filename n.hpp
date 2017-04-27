@@ -3,25 +3,22 @@
 #include <cmath>
 #include <ctime>
 #include <random>
-#include <fstream>
 #include <cstring>
-#include <iomanip>
+#include <omp.h>
 //#include <opencv2/core/core.hpp>
 //#include <opencv2/highgui/highgui.hpp>
 using namespace std;
 //using namespace cv;
 
-const int v_d = 392;
-const int h_d = 200;
-const int n_s = 1;
-enum _sample{LR, DET, GUMBEL};
-_sample m_s= LR;
-
 const int max_epoch = 1;
-const int batch = 1;
+const int batch = 4;
+const int n_s = 4;
+enum _sample{LR, DET, GUMBEL};
+_sample m_s= DET;
+
 double alpha = 3e-5;
 double _gamma = 0.9;
-//   ------------------------------------------------------------------------------   
+
 typedef vector<vector<double>> MTX;
 
 class Layer{
@@ -43,7 +40,7 @@ class Layer{
 class Weights{
    public:
       Weights(int m, int n):  _v(m, vector<double>(n)), _a(m, vector<double>(n)),
-                              _m(m, vector<double>(n, 0)){}
+                              _m(m, vector<double>(n)){}
       void init(){
          for (int i=0; i<_v.size(); i++){
             fill(_m[i].begin(), _m[i].end(), 0);
@@ -65,33 +62,34 @@ class Weights{
       MTX _v, _a, _m;
 };
 void sample(Layer &h, Layer &sh){
+   int n = h._v.front().size();
    switch(m_s){
       case LR:
          for (int k=0; k<batch; k++)
             for (int j=0; j<n_s; j++){
-               for (int i=0; i<h_d; i++)
-                  sh._v[k][i+j*(h_d+1)] = (double)rand()/RAND_MAX > h._v[k][i] ? 1 : 0;
-               sh._v[k][(j+1)*(h_d+1)-1] = 1;
+               for (int i=0; i<n; i++)
+                  sh._v[k][i+j*(n+1)] = (double)rand()/RAND_MAX > h._v[k][i] ? 1 : 0;
+               sh._v[k][(j+1)*(n+1)-1] = 1;
             }
          break;
       case DET:
          for (int k=0; k<batch; k++)
             for (int j=0; j<n_s; j++){
-               for (int i=0; i<h_d; i++)
-                  sh._v[k][i+j*(h_d+1)] = h._v[k][i];
-               sh._v[k][(j+1)*(h_d+1)-1] = 1;
+               for (int i=0; i<n; i++)
+                  sh._v[k][i+j*(n+1)] = h._v[k][i];
+               sh._v[k][(j+1)*(n+1)-1] = 1;
             }
          break;
       case GUMBEL:
          double u, p1, p0;
          for (int k=0; k<batch; k++){
             for (int j=0; j<n_s; j++){
-               for (int i=0; i<h_d; i++){
+               for (int i=0; i<n; i++){
                   u = -log( -log((double)rand()/RAND_MAX));   p1 = exp( log(h._v[k][i])+u );
                   u = -log( -log((double)rand()/RAND_MAX));   p0 = exp( log(1.0-h._v[k][i])+u );
-                  sh._v[k][i+j*(h_d+1)] = p1 / (p1+p0);
+                  sh._v[k][i+j*(n+1)] = p1 / (p1+p0);
                }
-               sh._v[k][(j+1)*(h_d+1)-1] = 1;
+               sh._v[k][(j+1)*(n+1)-1] = 1;
             }
          }
          break;
@@ -109,13 +107,13 @@ void feed_forward(MTX &x, Weights &w, Layer &sy, int ns=1){
             sy._v[k][i+l*m] = 1.0 / (1.0+exp(-sy._v[k][i+l*m]));
          }
 }
-void expect(Layer &sy, Layer &y, int ns){
+void expect(Layer &sy, Layer &y){
    int m = y._v.front().size();
    for (int k=0; k<batch; k++)
       for (int i=0; i<m; i++){
-         for (int l=0; l<ns; l++)
+         for (int l=0; l<n_s; l++)
             y._v[k][i] += sy._v[k][i+l*m];
-         y._v[k][i] /= ns;
+         y._v[k][i] /= n_s;
       }
 }
 void loss_function(Layer &y, MTX &l){
@@ -147,27 +145,29 @@ void back_prop(Layer &y, Layer &sy, Weights &w, Layer &sh){
             }
          }
 }
-void a_sample(Layer &sh, Layer &h, Layer &sy){
+void a_sample(Layer &sh, Layer &h, Layer &sy, Layer &y){
    int m = sy._v.front().size()/n_s;
+   int n = h._v.front().size();
+
    switch(m_s){
       case LR:
          for (int k=0; k<batch; k++)
             for (int j=0; j<n_s; j++)
-               for (int i=0; i<h_d; i++)
+               for (int i=0; i<n; i++)
                   for (int l=0; l<m; l++)
                      h._a[k][i] += sy._v[k][l+j*m] / (h._v[k][i]+1e-6) / n_s * h._a[k][i];
          break;      
       case DET:
          for (int k=0; k<batch; k++)
             for (int j=0; j<n_s; j++)
-               for (int i=0; i<h_d; i++)
-                  h._a[k][i] += sh._a[k][i+j*(h_d+1)];
+               for (int i=0; i<n; i++)
+                  h._a[k][i] += sh._a[k][i+j*(n+1)];
          break;
       case GUMBEL:
          for (int k=0; k<batch; k++)
             for (int j=0; j<n_s; j++)
-               for (int i=0; i<h_d; i++)
-                  h._a[k][i] += sh._a[k][i+j*(h_d+1)] * sh._v[k][i+j*(h_d+1)]*(1.0-sh._v[k][i+j*(h_d+1)])/h._v[k][i];
+               for (int i=0; i<n; i++)
+                  h._a[k][i] += sh._a[k][i+j*(n+1)] * sh._v[k][i+j*(n+1)]*(1.0-sh._v[k][i+j*(n+1)])/h._v[k][i];
          break;
    }
 }

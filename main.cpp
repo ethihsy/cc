@@ -4,7 +4,6 @@
 #include <cmath>
 #include <ctime>
 #include <fstream>
-#include <omp.h>
 #include "mnist/include/mnist/mnist_reader.hpp"
 #include "mnist/include/mnist/mnist_utils.hpp"
 #include "n.hpp"
@@ -15,8 +14,10 @@ using namespace std;
 int main(){
    auto dataset = mnist::read_dataset<std::vector, std::vector, uint8_t, uint8_t>();
    binarize_dataset(dataset);
-   srand(time(NULL));
+  // srand(time(NULL));
 
+   const int v_d = 392;
+   const int h_d = 200;
    MTX x(batch, vector<double>(v_d+1));
    vector<Layer> nn;
    nn.push_back(Layer(batch, h_d));             //   h1
@@ -35,16 +36,14 @@ int main(){
    ww.back().init();
    ww.push_back(Weights(v_d, h_d+1));           //   wh2y
    ww.back().init();
-
+// ------------------------------------------------------------------------------   
    int max_itr = dataset.training_images.size()/batch;
-   double gg[max_itr], ll[max_itr];
+   double gd[3][max_itr], ll[max_itr];
    ofstream fs("train_loss.txt");
-//   ------------------------------------------------------------------------------   
-   for (int epoch=0; epoch<max_epoch; epoch++){
-      shuffle(begin(dataset.training_images), end(dataset.training_images), default_random_engine(time(NULL)));
-      memset(ll, 0, sizeof(ll));
-      memset(gg, 0, sizeof(gg));
 
+   for (int epoch=0; epoch<max_epoch; epoch++){
+  //    shuffle(begin(dataset.training_images), end(dataset.training_images), default_random_engine(time(NULL)));
+      memset(ll, 0, sizeof(ll));
       for (int itr=0; itr<dataset.training_images.size(); itr+=batch){
          for (int i=0; i<nn.size(); i++)
             nn[i].reset();
@@ -62,29 +61,27 @@ int main(){
          for (int i=0; i<5; i+=3){
             sample(nn[i], nn[i+1]);
             feed_forward(nn[i+1]._v, ww[(i+3)/3], nn[i+2], n_s);
-            expect(nn[i+2], nn[i+3], n_s);
+            expect(nn[i+2], nn[i+3]);
          }
          loss_function(nn.back(), loss);
 
          for (int i=nn.size()-1; i>2; i-=3){
             back_prop(nn[i], nn[i-1], ww[i/3], nn[i-2]); 
-            a_sample(nn[i-2], nn[i-3], nn[i-1]);
+            a_sample(nn[i-2], nn[i-3], nn[i-1], nn[i]);
          }
          back_prop_w(nn[0], ww[0], x);
    //      check_gd(2,2,0, nn, ww, x, dataset.training_images,loss);
-         for (int i=0; i<ww.size(); i++)
+         for (int i=0; i<ww.size(); i++){
             optimizer(ww[i]);
-
+            gd[i][itr/batch] = ww[i].norm();
+         }
          for (int i=0; i<batch; i++)
             for (int j=0; j<v_d; j++)
                ll[itr/batch] += loss[i][j];
          ll[itr/batch] /= batch;
-         for (int i=0; i<ww.size(); i++)
-            gg[itr/batch] += ww[i].norm();
-         gg[itr/batch] /= ww.size();
       }
       for (int i=0; i<max_itr; i++)
-         fs << i+epoch*max_itr << "\t" << ll[i] << "\t" << gg[i] << endl;
+         fs << i+epoch*max_itr << "\t" << ll[i] << "\t" << gd[2][i] <<"\t" << gd[1][i] << "\t" << gd[0][i] << endl;
       cout << "epoch: " << epoch << " is done" << endl;
    }
    fs.close();
