@@ -1,6 +1,5 @@
-#include <fstream>
 #include <iomanip>
-
+using namespace std;
 void write_w(Weights &w, int n){
    string c;
    switch(n){
@@ -14,9 +13,9 @@ void write_w(Weights &w, int n){
          c="w_h2y.txt";
    }
    ofstream fs(c);
-   for (int i=0; i<w._v.size(); i++)
-      for (int j=0; j<w._v.front().size(); j++)
-         fs << setprecision(17) << fixed << w._v[i][j] << " ";
+   for (int i=0; i<w.v.n_rows; i++)
+      for (int j=0; j<w.v.n_cols; j++)
+         fs << setprecision(17) << fixed << w.v(i,j) << " ";
    fs.close();
 }/*
 void read_w(MTX &w, int n, int m, string c){
@@ -46,44 +45,43 @@ void check_data(MTX &x, MTX &y, int q){
       if (y[q][i]>0.5)  cout << "1 ";
       else  cout << "0 ";
    }
-}
-void check_gd(int lev, int pi, int pj, vector<Layer> &nn, vector<Weights> &ww, MTX &x, MTX &data, MTX &loss){
-   cout << ww[lev]._a[pi][pj] << endl;;
+}*/
+void check_gd(int lev, int pi, int pj, vector<Layer> &nn, vector<S_Layer> &ss, vector<Weights> &ww,
+              mat &x, std::vector<std::vector<uint8_t>> &data, mat &loss){
+   cout << ww[lev].a(pj,pi) << endl;;
    double hh=1e-6;
-   double yy[v_d];   
-   for (int i=0; i<v_d; i++)   
-      yy[i]=loss[0][i];
+   vec yy(392);   
+   for (int i=0; i<392; i++)   
+      yy(i)=loss(0,i);
 
    for (int i=0; i<nn.size(); i++)
       nn[i].reset();
-   nn.back().seed();
-   for (int i=0; i<ww.size(); i++)
-      ww[i].reset();
-   for (int i=0; i<batch; i++){
-      x[i][v_d] = 1;
-      for (int j=0; j<v_d; j++)
-         loss[i][j] = (double)data[i][j+v_d];
-   }
-   ww[lev]._v[pi][pj] -= hh;
+   for (int i=0; i<ss.size(); i++)
+      ss[i].reset();
+   for (int i=0; i<batch; i++)
+      for (int j=0; j<392; j++)
+         loss(i,j) = (double)data[i][j+392];
+
+   ww[lev].v(pj,pi) -= hh;
    feed_forward(x, ww[0], nn[0]);
-   for (int i=0; i<5; i+=3){
-      sample(nn[i], nn[i+1]);
-      feed_forward(nn[i+1]._v, ww[(i+3)/3], nn[i+2], n_s);
-      expect(nn[i+2], nn[i+3], n_s);
+   for (int i=0; i<nn.size()-1; i++){
+      sample(nn[i], ss[2*i]);
+      feed_forward(ss[2*i], ww[i+1], ss[2*i+1]);
+      expect(ss[2*i+1], nn[i+1]);
    }
    loss_function(nn.back(), loss);
 
    if (lev==ww.size()-1)
-      cout << (yy[pi]-loss[0][pi]) / hh;
+      cout << (yy(pi)-loss(0,pi)) / hh;
    else{
-      for (int i=0; i<v_d; i++)
-         yy[i]-=loss[0][i];
-      for (int i=1; i<v_d; i++) 
-         yy[0] += yy[i];
-      cout << yy[0]/hh << endl;
+      for (int i=0; i<392; i++)
+         yy(i) -= loss(0,i);
+      for (int i=1; i<392; i++) 
+         yy(0) += yy(i);
+      cout << yy(0)/hh << endl;
    }
    char zz;   cin >> zz;
-}
+}/*
 template<typename T>
 void test(T &data, vector<Layer> &nn){
    int max_itr = data.size()/batch;

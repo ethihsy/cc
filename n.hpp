@@ -1,181 +1,110 @@
-#include <iostream>
-#include <cstdlib>
-#include <cmath>
-#include <ctime>
-#include <random>
-#include <cstring>
-#include <omp.h>
+#include <armadillo>
 //#include <opencv2/core/core.hpp>
 //#include <opencv2/highgui/highgui.hpp>
-using namespace std;
+using namespace arma;
 //using namespace cv;
 
-const int max_epoch = 1;
-const int batch = 4;
-const int n_s = 4;
-enum _sample{LR, DET, GUMBEL};
+const int max_epoch = 10;
+const int batch = 40;
+const int n_s = 1;
+enum _sample{LR, DET};
 _sample m_s= DET;
 
 double alpha = 3e-5;
 double _gamma = 0.9;
 
-typedef vector<vector<double>> MTX;
-
 class Layer{
    public:
-      Layer(int m, int n): _v(m, vector<double>(n)),
-                           _a(m, vector<double>(n)){}
+      Layer(int m, int n): v(m,n), a(m,n){}
       void reset(){
-         for (int i=0; i<_v.size(); i++){
-            fill(_v[i].begin(), _v[i].end(), 0);
-            fill(_a[i].begin(), _a[i].end(), 0);
-         }
+         v.zeros(); 
+         a.zeros();
       }
-      void seed(){
-         for (int i=0; i<_a.size(); i++)
-            fill(_a[i].begin(), _a[i].end(), 1);
+      mat v, a;
+};
+class S_Layer{
+   public:
+      S_Layer(int m, int n, int l): v(l, mat(m,n)), a(l, mat(m,n)){}
+      void reset(){
+         for (int i=0; i<v.size(); i++)
+            a[i].zeros();
       }
-      MTX _v, _a;
+      std::vector<mat> v, a;
 };
 class Weights{
    public:
-      Weights(int m, int n):  _v(m, vector<double>(n)), _a(m, vector<double>(n)),
-                              _m(m, vector<double>(n)){}
+      Weights(int m, int n): v(n,m), a(n,m), mt(n,m){}
       void init(){
-         for (int i=0; i<_v.size(); i++){
-            fill(_m[i].begin(), _m[i].end(), 0);
-            for (int j=0; j<_v.front().size(); j++)
-               _v[i][j] = (double)rand()/RAND_MAX - 0.5;
-         }
+         mt.zeros();
+         v.randu();
+         v -= 0.5;
+ /*        for (int i=0; i<v.n_rows; i++)
+            for (int j=0; j<v.n_cols; j++)
+               v(i,j) = (double)rand()/RAND_MAX - 0.5;*/
       }
-      void reset(){
-         for (int i=0; i<_a.size(); i++)
-            fill(_a[i].begin(), _a[i].end(), 0);
-      }
-      double norm(){
-         double a = 0;
-         for (int i=0; i<_a.size(); i++)
-            for (int j=0; j<_a.front().size(); j++)
-               a += _a[i][j] * _a[i][j];
-         return sqrt(a);
-      }
-      MTX _v, _a, _m;
+      mat v, a, mt;
 };
-void sample(Layer &h, Layer &sh){
-   int n = h._v.front().size();
+void sample(Layer &h, S_Layer &sh){
    switch(m_s){
       case LR:
-         for (int k=0; k<batch; k++)
-            for (int j=0; j<n_s; j++){
-               for (int i=0; i<n; i++)
-                  sh._v[k][i+j*(n+1)] = (double)rand()/RAND_MAX > h._v[k][i] ? 1 : 0;
-               sh._v[k][(j+1)*(n+1)-1] = 1;
-            }
+         for (int i=0; i<n_s; i++){
+            mat rd(size(h.v), fill::randu);
+            sh.v[i].submat(0, 0, h.v.n_rows-1, h.v.n_cols-1) = conv_to<mat>::from(rd > h.v);
+            sh.v[i].col(h.v.n_cols).ones();
+         }
          break;
       case DET:
-         for (int k=0; k<batch; k++)
-            for (int j=0; j<n_s; j++){
-               for (int i=0; i<n; i++)
-                  sh._v[k][i+j*(n+1)] = h._v[k][i];
-               sh._v[k][(j+1)*(n+1)-1] = 1;
-            }
-         break;
-      case GUMBEL:
-         double u, p1, p0;
-         for (int k=0; k<batch; k++){
-            for (int j=0; j<n_s; j++){
-               for (int i=0; i<n; i++){
-                  u = -log( -log((double)rand()/RAND_MAX));   p1 = exp( log(h._v[k][i])+u );
-                  u = -log( -log((double)rand()/RAND_MAX));   p0 = exp( log(1.0-h._v[k][i])+u );
-                  sh._v[k][i+j*(n+1)] = p1 / (p1+p0);
-               }
-               sh._v[k][(j+1)*(n+1)-1] = 1;
-            }
+         for (int i=0; i<sh.v.size(); i++){
+            sh.v[i].submat(0, 0, h.v.n_rows-1, h.v.n_cols-1) = h.v;
+            sh.v[i].col(h.v.n_cols).ones();
          }
          break;
    }
 }
-void feed_forward(MTX &x, Weights &w, Layer &sy, int ns=1){
-   int m = w._v.size();
-   int n = w._v.front().size();
-
-   for (int k=0; k<batch; k++)
-      for (int l=0; l<ns; l++)
-         for (int i=0; i<m; i++){
-            for (int j=0; j<n; j++)
-               sy._v[k][i+l*m] += x[k][j+l*n] * w._v[i][j];
-            sy._v[k][i+l*m] = 1.0 / (1.0+exp(-sy._v[k][i+l*m]));
-         }
+void feed_forward(mat &x, Weights &w, Layer &y){
+   y.v = x * w.v;
+   y.v.transform([](double y){ return 1.0/(1.0+exp(-y)); });
 }
-void expect(Layer &sy, Layer &y){
-   int m = y._v.front().size();
-   for (int k=0; k<batch; k++)
-      for (int i=0; i<m; i++){
-         for (int l=0; l<n_s; l++)
-            y._v[k][i] += sy._v[k][i+l*m];
-         y._v[k][i] /= n_s;
-      }
+void feed_forward(S_Layer &x, Weights &w, S_Layer &y){
+   for (int i=0; i<x.v.size(); i++){
+      y.v[i] = x.v[i] * w.v;
+      y.v[i].transform([](double y){ return 1.0/(1.0+exp(-y)); });
+   }
 }
-void loss_function(Layer &y, MTX &l){
-   for (int k=0; k<batch; k++)
-      for (int i=0; i<y._v.front().size(); i++){
-         y._a[k][i] = -y._a[k][i] * (l[k][i]/y._v[k][i] - (1.0-l[k][i])/(1.0-y._v[k][i]));
-         l[k][i] = -(l[k][i]*log(y._v[k][i]) + (1.0-l[k][i])*log(1.0-y._v[k][i]));
-      }
+void expect(S_Layer &sy, Layer &y){
+   for (int i=0; i<sy.v.size(); i++)
+      y.v += sy.v[i];
+   y.v /= sy.v.size();
 }
-void back_prop_w(Layer &y, Weights &w, MTX &x){
-   for (int k=0; k<batch; k++)
-      for (int i=0; i<w._a.size(); i++){
-         y._a[k][i] *= y._v[k][i]*(1.0-y._v[k][i]);
-         for (int j=0; j<w._a.front().size(); j++)
-            w._a[i][j] += y._a[k][i] * x[k][j];
-      }
+void loss_function(Layer &y, mat &loss){
+   y.a %= -(loss/y.v - (1.0-loss)/(1.0-y.v));
+   loss = -(loss % log(y.v) + (1.0-loss) % log(1.0-y.v));
 }
-void back_prop(Layer &y, Layer &sy, Weights &w, Layer &sh){
-   int m = w._a.size();
-   int n = w._a.front().size();
-
-   for (int k=0; k<batch; k++)
-      for (int i=0; i<m; i++)
-         for (int l=0; l<n_s; l++){
-            sy._a[k][i+l*m] = y._a[k][i]/n_s * sy._v[k][i+l*m]*(1.0-sy._v[k][i+l*m]);
-            for (int j=0; j<n; j++){
-               w._a[i][j] += sy._a[k][i+l*m] * sh._v[k][j+l*n];
-               sh._a[k][j+l*n] += sy._a[k][i+l*m] * w._v[i][j];
-            }
-         }
+void back_prop_w(Layer &y, Weights &w, mat &x){
+   y.a %= y.v % (1.0-y.v);
+   w.a += x.t() * y.a;
 }
-void a_sample(Layer &sh, Layer &h, Layer &sy, Layer &y){
-   int m = sy._v.front().size()/n_s;
-   int n = h._v.front().size();
-
+void back_prop(Layer &y, S_Layer &sy, Weights &w, S_Layer &sh){
+   for (int i=0; i<sy.a.size(); i++){
+      sy.a[i] = y.a / n_s % sy.v[i] % (1.0-sy.v[i]);
+      w.a += sh.v[i].t() * sy.a[i];
+      sh.a[i] += (sy.a[i] * w.v.t());
+   }
+}
+void a_sample(S_Layer &sh, Layer &h, S_Layer &sy, Layer &y){
    switch(m_s){
       case LR:
-         for (int k=0; k<batch; k++)
-            for (int j=0; j<n_s; j++)
-               for (int i=0; i<n; i++)
-                  for (int l=0; l<m; l++)
-                     h._a[k][i] += sy._v[k][l+j*m] / (h._v[k][i]+1e-6) / n_s * h._a[k][i];
+         for (int i=0; i<sh.a.size(); i++)
+            h.a += y.a % sy.v[i] / h.v / n_s;
          break;      
       case DET:
-         for (int k=0; k<batch; k++)
-            for (int j=0; j<n_s; j++)
-               for (int i=0; i<n; i++)
-                  h._a[k][i] += sh._a[k][i+j*(n+1)];
-         break;
-      case GUMBEL:
-         for (int k=0; k<batch; k++)
-            for (int j=0; j<n_s; j++)
-               for (int i=0; i<n; i++)
-                  h._a[k][i] += sh._a[k][i+j*(n+1)] * sh._v[k][i+j*(n+1)]*(1.0-sh._v[k][i+j*(n+1)])/h._v[k][i];
+         for (int i=0; i<sh.a.size(); i++)
+            h.a += sh.a[i].submat(0, 0, h.a.n_rows-1, h.a.n_cols-1);
          break;
    }
 }
 void optimizer(Weights &w){
-   for (int i=0; i<w._v.size(); i++)
-      for (int j=0; j<w._v.front().size(); j++){
-         w._a[i][j] /= batch;
-         w._m[i][j] = _gamma * w._m[i][j] + alpha * w._a[i][j];
-         w._v[i][j] = w._v[i][j] - w._m[i][j];
-      }
+   w.a /= batch;
+   w.mt = _gamma * w.mt + alpha * w.a;
+   w.v -= w.mt;
 }
