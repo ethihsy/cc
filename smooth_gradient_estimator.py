@@ -1,8 +1,3 @@
-
-# coding: utf-8
-
-# In[ ]:
-
 import numpy as np
 import tensorflow as tf
 from tensorflow.examples.tutorials.mnist import input_data
@@ -15,11 +10,24 @@ for i in range(10000):
     data.test.images[i] = (np.random.uniform(0.,1.,784)<data.test.images[i]).astype(float)
 
 
-# In[ ]:
+#------------------------------------------------------------------------
+eps = 1e-7
+dim = 392         # observed nodes
+nn  = 200         # hidden nodes
+batch = 24
+ns  = 10          # samples
 
-def mul_b(p, w):
+lr  = tf.placeholder(tf.float32)
+opt = tf.train.AdamOptimizer(lr)
+optbw = tf.train.AdamOptimizer(lr)
+coef_bw = .01     # lambda
+const_bw = 10     # constraint C
+
+
+#------------------------------------------------------------------------
+def mul_b(p, w, af=None):
     p = tf.concat([p, tf.ones([tf.shape(p)[0],1])], 1)
-    return tf.nn.sigmoid(tf.matmul(p, w))
+    return tf.matmul(p,w) if af is None else af(tf.matmul(p, w))
 
 def bandwidth(p):
     u = tf.tile(tf.reduce_mean(tf.reshape(p,[ns,-1,nn]),0),[ns,1])
@@ -40,87 +48,77 @@ def smooth_sample(p, z, bw):
     s = (p-z) / (tf.sqrt(2*tf.square(bw)) + eps)
     return tf.check_numerics(0.5 * (1 + tf.erf(s)), 'erf')
 
+def jacobian(y_flat, x):
+    n = y_flat.shape[0]
+    loop_vars = [
+        tf.constant(0, tf.int32),
+        tf.TensorArray(tf.float32, size=n),
+    ]
+    _, jacobian = tf.while_loop(
+        lambda j, _: j < n,
+        lambda j, result: (j+1, result.write(j, tf.gradients(y_flat[j], x))),
+        loop_vars)
+    return tf.squeeze(jacobian.stack())
 
-# In[ ]:
-
-lr  = tf.placeholder(tf.float32)
-eps = 1e-7
-dim = 392
-nn  = 200
-ns  = tf.placeholder(tf.int32)
-ST = tf.placeholder(tf.bool)
-
-
-wxh  = tf.Variable(tf.random_normal([dim+1,nn], stddev=np.sqrt(2.55e-3)))
-whh  = tf.Variable(tf.random_normal([nn+1, nn], stddev=np.sqrt(5e-3)))
-why  = tf.Variable(tf.random_normal([nn+1,dim], stddev=np.sqrt(5e-3)))
+def opt_bw(l, tl, g):
+    bwg = jacobian(tf.reshape(l,[ns,-1,1]), wx)
+    bwl = tf.reshape(tf.square(tf.reshape(bwg,[-1,nn]) - tf.tile(g[0][0],[ns,1])), [ns,dim+1,nn])
+    bwl = tf.reduce_sum(bwl, 0) / tf.cast(ns,tf.float32) / (tf.cast(ns,tf.float32)-1)
+    bias = coef_bw * tf.square(tf.reduce_mean(tf.square(l-tl)-const_bw))
+    bwgd = optbw.compute_gradients(bwl + bias, bw)
+    return optbw.apply_gradients(bwgd)
 
 
-y_  = tf.placeholder(tf.float32, [None, dim])
-x   = tf.placeholder(tf.float32, [None, dim])
+#------------------------------------------------------------------------
+wx = tf.Variable(tf.random_normal([dim+1,nn], stddev=np.sqrt(3.37e-3)))
+wy = tf.Variable(tf.random_normal([nn+1,dim], stddev=np.sqrt(3.37e-3)))
+bw = tf.Variable(tf.ones([nn])*.05)
+y_ = tf.placeholder(tf.float32, [batch, dim])
+x  = tf.placeholder(tf.float32, [batch, dim])
 
-h  = mul_b(x,  wxh)
+h  = mul_b(x, wx, tf.nn.sigmoid)
 nh = tf.tile(h, [ns,1])
 sd = tf.random_uniform(tf.shape(nh))
-bw = bandwidth(nh-sd)
-dw = dirac(nh-sd,bw)
-#sh = step_sample(nh, sd, dw)
-sh = tf.cond(ST, lambda: straight_through(nh, sd),
-                 lambda: smooth_sample(nh, sd, bw))
+sh = smooth_sample(nh, sd, bw)
 
-#h2 = mul_b(sh, whh)
-#sd2 = tf.random_uniform(tf.shape(h2))
-#bw2 = bandwidth(h2-sd2)
-#sh2 = tf.cond(ST, lambda: straight_through(h2, sd2),
-#                  lambda: smooth_sample(h2, sd2, bw2))
+y  = mul_b(sh, wy)
+yy = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(labels=tf.tile(y_,[ns,1]),logits=y),1)
+nll = tf.reduce_mean(yy)
 
-y  = mul_b(sh,why)
-yy  = tf.pow(y+eps, tf.tile(y_,[ns,1])) * tf.pow(1-y+eps, 1-tf.tile(y_,[ns,1]))
-ye  = tf.reduce_mean(tf.reshape(yy,[ns,-1,dim]),0)
-nll = tf.reduce_mean(tf.reduce_sum(-tf.log(ye),1))
-
-opt = tf.train.AdamOptimizer(lr)
-train = opt.minimize(nll)
+tsh = tf.ceil(nh-sd)
+ty  = mul_b(tsh, wy)
+tyy = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(labels=tf.tile(y_,[ns,1]),logits=ty),1)
+tnll = tf.reduce_mean(tyy)
 
 
-# In[ ]:
+#------------------------------------------------------------------------
+gd  = opt.compute_gradients(nll, [wx,wy])
+train = opt.apply_gradients(gd)
+train_bw = opt_bw(yy, tyy, gd)
 
-tsh = Bernoulli(probs=nh,dtype=tf.float32).sample()
-#th2 = mul_b(tsh, whh)
-#tsh2 = Bernoulli(probs=th2,dtype=tf.float32).sample()
-ty  = mul_b(tsh,why)
-tyy  = tf.pow(ty+eps, tf.tile(y_,[ns,1])) * tf.pow(1-ty+eps, 1-tf.tile(y_,[ns,1]))
-tye  = tf.reduce_mean(tf.reshape(tyy,[ns,-1,dim]),0)
-tnll = tf.reduce_mean(tf.reduce_sum(-tf.log(tye),1))
-
-
-# In[ ]:
-
-def fit_model(steps, filename, _lr, _ns, _ST):
+#------------------------------------------------------------------------
+def fit_model(steps, filename, _lr):
     train_loss = np.empty((1000, steps/1000))
     test_loss = []
     
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
         for i in range(steps):
-            batch_   = data.train.next_batch(24, shuffle=True)[0]
-            batch_xs = (np.random.uniform(0.,1.,[24,392])<batch_[:, 0:392]).astype(float)
-            batch_ys = (np.random.uniform(0.,1.,[24,392])<batch_[:, 392:784]).astype(float)
-            res = sess.run([nll, train], {x: batch_xs, y_: batch_ys, ns: _ns, lr: _lr, ST:_ST}) 
+            batch_   = data.train.next_batch(batch, shuffle=True)[0]
+            batch_xs = (np.random.uniform(0.,1.,[batch,dim])<batch_[:, 0:392]).astype(float)
+            batch_ys = (np.random.uniform(0.,1.,[batch,dim])<batch_[:, 392:784]).astype(float)
+            res = sess.run([nll, train, train_bw], {x: batch_xs, y_: batch_ys, lr: _lr}) 
 
             train_loss[i%1000, i/1000] = res[0]
             if (i+1)%1000==0:
-                batch_   = data.test.next_batch(100, shuffle=True)[0]
+                batch_   = data.test.next_batch(batch, shuffle=True)[0]
                 batch_xs = batch_[:, 0:392]
                 batch_ys = batch_[:, 392:784]
-                res = sess.run(tnll, {x: batch_xs, y_: batch_ys, ns: 100, lr: _lr, ST:_ST})  
+                res = sess.run(tnll, {x: batch_xs, y_: batch_ys, lr: _lr})  
                 test_loss.append(res)
 
         np.save(filename, [train_loss, test_loss])
     return train_loss
 
 
-# In[ ]:
-
-erf10 = fit_model(300000, "st10_2", 1e-3, 10, True)
-
+erf10 = fit_model(300000, "opt_10_p01", 1e-3)
