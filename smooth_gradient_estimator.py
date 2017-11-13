@@ -4,24 +4,26 @@ from tensorflow.examples.tutorials.mnist import input_data
 Bernoulli = tf.contrib.distributions.Bernoulli
 
 data = input_data.read_data_sets("MNIST_data/", one_hot=True)
-for i in range(5000):
+for i in xrange(5000):
     data.validation.images[i] = (np.random.uniform(0.,1.,784)<data.validation.images[i]).astype(float)
-for i in range(10000):
+for i in xrange(10000):
     data.test.images[i] = (np.random.uniform(0.,1.,784)<data.test.images[i]).astype(float)
 
 
 #------------------------------------------------------------------------
 eps = 1e-7
-dim = 392         # observed nodes
-nn  = 200         # hidden nodes
+dim = 392          # observed nodes
+nn  = 200          # hidden nodes
 batch = 24
-ns  = 10          # samples
+ns  = 4            # samples
+init_bw = .1
 
 lr  = tf.placeholder(tf.float32)
 opt = tf.train.AdamOptimizer(lr)
-optbw = tf.train.AdamOptimizer(lr)
-coef_bw = .01     # lambda
-const_bw = 10     # constraint C
+opt_bw  = tf.train.AdamOptimizer(lr*.1)
+
+coef_bw = 1.        # lambda
+const_bw = 10.      # constraint C
 
 
 #------------------------------------------------------------------------
@@ -60,19 +62,21 @@ def jacobian(y_flat, x):
         loop_vars)
     return tf.squeeze(jacobian.stack())
 
-def opt_bw(l, tl, g):
-    bwg = jacobian(tf.reshape(l,[ns,-1,1]), wx)
-    bwl = tf.reshape(tf.square(tf.reshape(bwg,[-1,nn]) - tf.tile(g[0][0],[ns,1])), [ns,dim+1,nn])
-    bwl = tf.reduce_sum(bwl, 0) / tf.cast(ns,tf.float32) / (tf.cast(ns,tf.float32)-1)
-    bias = coef_bw * tf.square(tf.reduce_mean(tf.square(l-tl)-const_bw))
-    bwgd = optbw.compute_gradients(bwl + bias, bw)
-    return optbw.apply_gradients(bwgd)
+def optimal_bw(le, tle, l, tl, g):
+    t = tf.gradients(le, l)[0]
+    bwg = jacobian(tf.reshape(tf.stop_gradient(t)*l/batch,[ns,-1,1]), wx)
+    v = tf.reshape(tf.square(tf.reshape(bwg,[-1,nn]) - tf.tile(g[0][0],[ns,1])), [ns,dim+1,nn])
+    v = tf.reduce_mean(tf.reduce_sum(v, 0) / (ns*(ns-1.)))
+    
+    b = tf.square(le-tle)
+    bwgd = opt_bw.compute_gradients(v + tf.reduce_mean(coef_bw*tf.maximum(b-const_bw, tf.zeros(tf.shape(b)))), bw)
+    return opt_bw.apply_gradients(bwgd), v, tf.reduce_mean(b)
 
 
 #------------------------------------------------------------------------
 wx = tf.Variable(tf.random_normal([dim+1,nn], stddev=np.sqrt(3.37e-3)))
 wy = tf.Variable(tf.random_normal([nn+1,dim], stddev=np.sqrt(3.37e-3)))
-bw = tf.Variable(tf.ones([nn])*.05)
+bw = tf.Variable(tf.ones([nn]) * init_bw)
 y_ = tf.placeholder(tf.float32, [batch, dim])
 x  = tf.placeholder(tf.float32, [batch, dim])
 
@@ -83,42 +87,45 @@ sh = smooth_sample(nh, sd, bw)
 
 y  = mul_b(sh, wy)
 yy = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(labels=tf.tile(y_,[ns,1]),logits=y),1)
-nll = tf.reduce_mean(yy)
+ye = -tf.reduce_logsumexp(tf.reshape(-yy,[ns,-1,1]), 0)
+nll = tf.reduce_mean(ye)
 
 tsh = tf.ceil(nh-sd)
 ty  = mul_b(tsh, wy)
 tyy = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(labels=tf.tile(y_,[ns,1]),logits=ty),1)
-tnll = tf.reduce_mean(tyy)
+tye = -tf.reduce_logsumexp(tf.reshape(-tyy,[ns,-1,1]), 0)
+tnll = tf.reduce_mean(tye)
 
 
 #------------------------------------------------------------------------
 gd  = opt.compute_gradients(nll, [wx,wy])
 train = opt.apply_gradients(gd)
-train_bw = opt_bw(yy, tyy, gd)
+train_bw, variance, bias = optimal_bw(ye, tye, yy, tyy, gd)
+mbw = tf.reduce_mean(tf.abs(bw))
 
 #------------------------------------------------------------------------
 def fit_model(steps, filename, _lr):
     train_loss = np.empty((1000, steps/1000))
-    test_loss = []
+    test_loss  = np.empty((1000, steps/1000))
+    var_bias  = np.empty((3, 1000, steps/1000))    
     
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
-        for i in range(steps):
+        for i in xrange(steps):
             batch_   = data.train.next_batch(batch, shuffle=True)[0]
             batch_xs = (np.random.uniform(0.,1.,[batch,dim])<batch_[:, 0:392]).astype(float)
             batch_ys = (np.random.uniform(0.,1.,[batch,dim])<batch_[:, 392:784]).astype(float)
-            res = sess.run([nll, train, train_bw], {x: batch_xs, y_: batch_ys, lr: _lr}) 
-
+            res = sess.run([nll, train, train_bw, variance, bias, mbw], {x: batch_xs, y_: batch_ys, lr: _lr}) 
             train_loss[i%1000, i/1000] = res[0]
-            if (i+1)%1000==0:
-                batch_   = data.test.next_batch(batch, shuffle=True)[0]
-                batch_xs = batch_[:, 0:392]
-                batch_ys = batch_[:, 392:784]
-                res = sess.run(tnll, {x: batch_xs, y_: batch_ys, lr: _lr})  
-                test_loss.append(res)
+            var_bias[:, i%1000, i/1000] = res[-3:]
 
-        np.save(filename, [train_loss, test_loss])
+            batch_   = data.test.next_batch(batch, shuffle=True)[0]
+            batch_xs = batch_[:, 0:392]
+            batch_ys = batch_[:, 392:784]
+            test_loss[i%1000, i/1000] = sess.run(tnll, {x: batch_xs, y_: batch_ys, lr: _lr}) 
+            
+        np.save(filename, [train_loss, test_loss, var_bias])
     return train_loss
 
 
-erf10 = fit_model(300000, "opt_10_p01", 1e-3)
+erf10 = fit_model(25000, "test", 1e-3)
