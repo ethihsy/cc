@@ -14,12 +14,12 @@ ns  = 10
 batch = 24
 tau = tf.placeholder(tf.float32)
 cc = tf.placeholder(tf.float32, [200])
-kk = tf.placeholder(tf.float32, [200])
+kk = tf.placeholder(tf.float32)
 dd = tf.placeholder(tf.float32)
 
 lr = tf.placeholder(tf.float32)
-y_ = tf.placeholder(tf.float32, [batch, 392])
-x  = tf.placeholder(tf.float32, [batch, 392])
+y_ = tf.placeholder(tf.float32, [24, 392])
+x  = tf.placeholder(tf.float32, [24, 392])
 
 
 
@@ -38,8 +38,9 @@ def nets(estimator):
 
 
 
-def fit_model(filename,_lr,t, dataset):
-    steps = 50
+def fit_model(filename,_lr,t, dataset, para=None):
+
+    steps = 100
     if dataset=='M':
         data_train, data_val, data_test = bmnist()
         dsfd = 'MNIST'
@@ -51,14 +52,14 @@ def fit_model(filename,_lr,t, dataset):
         sess.run(tf.global_variables_initializer())
         saver = tf.train.Saver()
         train_loss = np.empty(steps)
-        val_loss   = np.empty(steps) 
+        val_loss   = np.empty(steps)
         test_loss  = np.empty(steps)
-        var_g      = np.empty((steps))        
+        var_g      = np.empty(steps)
 
         d  = 1.
-        c_ = np.asarray([1]*75 + [0]*50 + [-1]*75)
+        c_ = np.asarray([1.]*100+[0.]*100)
         c = c_
-        k  = 1. - np.abs(c_) 
+        k  = 0.
 
         for i in xrange(steps*1000):
             batch_   = np.reshape(random.sample(data_train, batch), [batch,-1])
@@ -66,31 +67,31 @@ def fit_model(filename,_lr,t, dataset):
             batch_ys = (np.random.uniform(0.,1.,[batch,392])<batch_[:, 392:784]).astype(float)
             res, _ = sess.run([loss, train], {x: batch_xs, y_: batch_ys, lr: _lr, tau:t, cc:c, kk:k, dd:d})
 
-            if i % 1000 == 1:
-                train_loss[i/1000] = res
-                var_g[i/1000] = sess.run(vg,{x:batch_xs, y_:batch_ys, tau:t, lr:_lr,cc:c,dd:d,kk:k})   
 
+            if i%1000==1:
+                ind = i/1000
+                train_loss[ind] = res
+                var_g[ind] = sess.run(vg,{x:batch_xs, y_:batch_ys, tau:t, lr:_lr,cc:c,dd:d,kk:k})   
                 batch_ = np.reshape(random.sample(data_val, batch), [batch,-1])
                 batch_xs, batch_ys = batch_[:, 0:392], batch_[:, 392:784]
-                val_loss[i/1000] = sess.run(loss, {x: batch_xs, y_: batch_ys, tau:1e-3, cc:np.zeros([200]),kk:np.ones([200]),dd:3.})
-
+                val_loss[ind] = sess.run(loss, {x: batch_xs, y_: batch_ys, tau:1e-3, cc:np.zeros([200]),kk:1.,dd:3.})
                 batch_ = np.reshape(random.sample(data_test, batch), [batch,-1])
                 batch_xs, batch_ys = batch_[:, 0:392], batch_[:, 392:784]
-                test_loss[i/1000] = sess.run(loss, {x: batch_xs, y_: batch_ys,tau:1e-3,
-                                                    cc:np.zeros([200]),kk:np.ones([200]),dd:3.})
+                test_loss[ind] = sess.run(loss, {x: batch_xs, y_: batch_ys,tau:1e-3, cc:np.zeros([200]),kk:1.,dd:3.})
 
                 if filename[:2]=='MX':
-                    d = 3. - 2*np.exp(-0.00003*i)
-                    k = 1. - np.exp(-0.00005*i)*np.abs(c_)
-                    c = np.exp(-0.00003*i)*c_
+                    d = 2. - np.exp(-1e-5*para*i)
+                    k = 1. - np.exp(-6e-5*i)
+                    c = np.exp(-3e-5*i)*c_
                 else:
-                    t = np.maximum(np.exp(-0.00003*i),0.1)
+                    t = np.maximum(np.exp(-3e-5*i),0.1)
 
         directory = 'SNN/'+dsfd+'/'+filename
         if not os.path.exists(directory):
             os.makedirs(directory)
         np.save(directory+'/loss_rec', [train_loss, val_loss, test_loss, var_g])
- #       save_path = saver.save(sess, directory+"/model.ckpt")
+        save_path = saver.save(sess, directory+"/model.ckpt")
+
 
 
 loss, vl, _ = nets(mse)
@@ -100,4 +101,13 @@ vg = tf.reduce_sum(vg)/24./(392*200+200+200*200+200)
 train=tf.train.AdamOptimizer(learning_rate=lr).minimize(loss,var_list=slim.get_model_variables())
 
 
-fit_model('MX1e-3', 1e-3, .1, 'O')
+for q1 in ['M','O']:
+#    for q2 in ['200_0_0','100_100_0','0_200_0',
+#               '100_0_100','0_0_200',
+#               '50_75_75','100_50_50','150_25_25',
+#               '75_50_75','50_100_50','25_150_25']:
+#        q3 = str.split(q2,'_')
+#        fit_model('MX1e-3_'+q2, 1e-3, .1, q1, np.asarray([1]*int(q3[0])+[0]*int(q3[1])+[-1]*int(q3[2])))
+
+    for q2 in [3.,7.]:
+        fit_model('MX1e-3_'+str(q2),1e-3,.1,q1, q2)

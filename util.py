@@ -43,29 +43,20 @@ def bomniglot():
     return data_train, data_test, data_test
 
 
-def draw(batch_xs, ss, ii, half,code=False):
+def draw(batch_xs, ss, ii, half):
     fig, ax = plt.subplots(1,1, figsize=(18,10))
     up = np.concatenate([j for j in [np.reshape(i,[14*half,28]) for i in batch_xs]], 1)
 
     for si, s in enumerate(ss):
         n, nn = 5, 20
-        if not code:
-            p1 = np.concatenate([j for j in [np.reshape(i,[14*half,28]) for i in s]], 1)
-            p1 = np.concatenate(np.split(np.concatenate([up,p1], 0), 1, 1), 0) if half==1 else p1
-            qw = np.ones([nn*28,5])
+        p1 = np.concatenate([j for j in [np.reshape(i,[14*half,28]) for i in s]], 1)
+        p1 = np.concatenate(np.split(np.concatenate([up,p1], 0), 1, 1), 0) if half==1 else p1
+        qw = np.ones([nn*28,5])
 
-            for i in range(nn):
-                pp1 = p1[:,i*28*n:i*28*n+28*n] if i==0 else np.concatenate([pp1, p1[:,i*28*n:i*28*n+28*n]],0)
+        for i in range(nn):
+            pp1 = p1[:,i*28*n:i*28*n+28*n] if i==0 else np.concatenate([pp1, p1[:,i*28*n:i*28*n+28*n]],0)
     
-        else:
-            p1 = np.concatenate([j for j in [np.reshape(i,[20,10]) for i in s]], 1)
-            qw = np.ones([nn*20,5])
-            for i in range(nn):
-                pp1 = p1[:,i*20*n:i*20*n+20*n] if i==0 else np.concatenate([pp1, p1[:,i*20*n:i*20*n+20*n]],0)
-
         a = np.concatenate([pp1,qw],1) if si==0 else np.concatenate([a,pp1,qw],1)
-
-
 
     plt.imshow(a, cmap=plt.cm.gray, interpolation='none')
     plt.savefig(ii)

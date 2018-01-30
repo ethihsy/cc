@@ -8,13 +8,11 @@ slim = tf.contrib.slim
 tf.reset_default_graph()
 
 
-
-eps = 1e-7
 tau = tf.placeholder(tf.float32)
 lr  = tf.placeholder(tf.float32)
 x  = tf.placeholder(tf.float32,[100,784])
 cc = tf.placeholder(tf.float32,[200])
-kk = tf.placeholder(tf.float32,[200])
+kk = tf.placeholder(tf.float32)
 dd = tf.placeholder(tf.float32)
 
 def nets(estimator):
@@ -35,6 +33,7 @@ def nets(estimator):
 
 
 def fit_model(filename, _lr, t, dataset, para=None):
+    
     if dataset =='M':
         data_train, data_val, data_test = bmnist()
         dsfd = 'MNIST'
@@ -47,35 +46,41 @@ def fit_model(filename, _lr, t, dataset, para=None):
         sess.run(tf.global_variables_initializer())        
         saver = tf.train.Saver()
         train_loss = np.empty((steps))
-        val_loss   = np.empty((steps))    
+        val_loss   = np.empty((steps))
         test_loss  = np.empty((steps))
         var_g      = np.empty((steps))
 
         batch = 100
         d = 1.
 
-        c_ = np.asarray([1.]*100 + [0.]*100)
+        c_ = np.asarray([1.]*100+[0.]*100)
         c = c_
-        k = 1. - np.abs(c_) 
+        k = 0.
 
         for i in xrange(steps*1000):
             batch_ = np.reshape(random.sample(data_train, batch), [batch,-1])
             batch_ = (np.random.uniform(0.,1.,[batch,784])<batch_).astype(float)
             _, res = sess.run([train,loss],{x:batch_, tau:t, lr:_lr, cc:c, kk:k, dd:d})
+            
+
             if i%1000==1:
-                train_loss[i/1000] = res
-                var_g[i/1000] = sess.run(vg,{x:batch_, tau:t, lr:_lr, cc:c, kk:k, dd:d})
+                ind = i/1000 
+                train_loss[ind] = res
+                var_g[ind] = sess.run(vg,{x:batch_, tau:t, lr:_lr, cc:c, kk:k, dd:d})
                 batch_ = np.reshape(random.sample(data_val, batch), [batch,-1])
-                val_loss[i/1000] = sess.run(loss,{x:batch_, tau:0.001, lr:_lr, cc:np.zeros([200]), kk:np.ones([200]),dd:3.})
+                val_loss[ind]  = sess.run(loss,{x:batch_, tau:0.001, lr:_lr, cc:np.zeros([200]), kk:1.,dd:3.})
                 batch_ = np.reshape(random.sample(data_test, batch), [batch,-1])
-                test_loss[i/1000] = sess.run(loss,{x:batch_, tau:0.001, lr:_lr, cc:np.zeros([200]), kk:np.ones([200]),dd:3.})
+                test_loss[ind] = sess.run(loss,{x:batch_, tau:0.001, lr:_lr, cc:np.zeros([200]), kk:1.,dd:3.})
+
 
                 if filename[:2]=='MX':
-                    d = 3. - 2*np.exp(-0.00003*i)
-                    k = 1. - np.exp(-0.00005*i)*np.abs(c_)
-                    c = np.exp(-0.00003*i)*c_
+                    d = 3. - 2.*np.exp(-1e-5*para*i)
+                    k = 1. - np.exp(-6e-5*i)
+                    c = np.exp(-3e-5*i)*c_
+
                 else:
-                    t = np.maximum(np.exp(-.00003*i),0.1)
+                    t = np.maximum(np.exp(-3e-5*i),0.5)
+
 
         directory = 'VAE/'+dsfd+'/'+filename
         if not os.path.exists(directory):
@@ -84,16 +89,26 @@ def fit_model(filename, _lr, t, dataset, para=None):
         save_path = saver.save(sess, directory+"/model.ckpt")
 
 
-loss, vl, _ = nets(anneal_straight_through)
+
+
+loss, vl, _ = nets(mse)
 vg = [jacobian(vl, slim.get_model_variables()[z]) for z in range(4)]
 vg = [tf.reduce_sum(tf.square(z-tf.reduce_mean(z,0))) for z in vg]
 vg = tf.reduce_sum(vg) / 100. / (784*400+400+400*200+200) 
 train=tf.train.AdamOptimizer(learning_rate=lr).minimize(loss, var_list=slim.get_model_variables())
 
 
-fit_model('AST1e-3', 1e-3, 1., 'M')
 
+for q1 in ['M','O']:
+#    for q2 in ['200_0_0','100_100_0','0_200_0',
+#               '100_0_100','0_0_200',
+#               '50_75_75','100_50_50','150_25_25',
+#               '75_50_75','50_100_50','25_150_25']:
+#        q3 = str.split(q2,'_')
+#        fit_model('MX1e-3_'+q2, 1e-3, .1, q1, np.asarray([1]*int(q3[0])+[0]*int(q3[1])+[-1]*int(q3[2])))
 
-
+ #       for q3 in [3.,7.]:
+#            fit_model('MX1e-3_'+str(q3), 1e-3, .1, q1, q3)
+    fit_model('GB1e-3', 1e-3, 1., q1)
 
 
