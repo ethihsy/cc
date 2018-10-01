@@ -4,111 +4,89 @@ from estimator import *
 import numpy as np
 import random
 import tensorflow as tf
+import time
 slim = tf.contrib.slim
 tf.reset_default_graph()
 
+batch, itr, nn = 10, 50, 1
+dim, hd1, hd2 = 784, 400, 200
 
+k   = 10
 tau = tf.placeholder(tf.float32)
 lr  = tf.placeholder(tf.float32)
-x  = tf.placeholder(tf.float32,[100,784])
-cc = tf.placeholder(tf.float32,[200])
-kk = tf.placeholder(tf.float32)
-dd = tf.placeholder(tf.float32)
+x   = tf.placeholder(tf.float32,[batch, dim])
 
-def nets(estimator):
-    h = slim.stack(x,slim.fully_connected,[400])
-    h = slim.fully_connected(h,200,activation_fn=None)
-    z = tf.nn.sigmoid(h)
+def nets(estimator, discrete):
+    h  = slim.fully_connected(x, hd1)
+    _z = slim.fully_connected(h, hd2, activation_fn=None)
+    z  = tf.reshape(_z, [-1,k])
+    u  = tf.random_uniform(tf.shape(z))
     
-    s = tf.reshape(estimator(z,tf.random_uniform(tf.shape(z)),tau, cc,dd,kk), [-1,200])
-    h2= slim.stack(slim.flatten(s),slim.fully_connected,[400])    
-    y = slim.fully_connected(h2,784,activation_fn=None)
+    _s = z - tf.log(-tf.log(u))
+    s  = tf.one_hot(tf.argmax(_s, -1), k) if discrete else tf.nn.softmax(_s/tau)
+    s  = tf.reshape(s, [-1, hd2])
+
+    y   = slim.stack(s, slim.fully_connected, [hd1])
+    y   = slim.stack(y, slim.fully_connected, [dim], activation_fn=None)
+    nll = tf.nn.sigmoid_cross_entropy_with_logits(labels=tf.tile(x,[nn,1]), logits=y)
+    nll = tf.reduce_sum(nll, 1, keepdims=True)
     
-    kld = tf.reduce_sum(z*(tf.log(z+eps)-tf.log(.5)) + (1-z)*(tf.log(1-z+eps)-tf.log(.5)), 1)
-    nll = tf.nn.sigmoid_cross_entropy_with_logits(labels=x, logits=y)
-    elbo= tf.reduce_sum(nll,1) + kld
-    
-    return tf.reduce_mean(elbo), elbo, tf.nn.sigmoid(y)
+    zz   = tf.reshape(tf.nn.softmax(tf.reshape(_z,[-1,k])), [bb, hd2])
+    kld  = tf.reduce_mean(tf.reduce_sum(zz * (tf.log(tf.cast(k,tf.float32)*zz+eps)), 1))  
+    elbo = tf.reduce_mean(nll) + kld
+    l    = estimator(nll, z, s, tau, slim.get_variables(), 
+                     x, nn, k, u, hd2, h) if discrete else 0.
+    return elbo, l
 
 
+def fit_model(filename, steps,  _lr, cate, dataset, sta):
+    data_train, data_val, data_test = bomniglot(sta) if dataset=='OMNIGLOT' else bmnist(sta)
 
-def fit_model(filename, _lr, t, dataset, para=None):
-    
-    if dataset =='M':
-        data_train, data_val, data_test = bmnist()
-        dsfd = 'MNIST'
-    else:
-        data_train, data_val, data_test = bomniglot()
-        dsfd = 'OMNIGLOT'
-
-    steps = 100
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())        
         saver = tf.train.Saver()
-        train_loss = np.empty((steps))
-        val_loss   = np.empty((steps))
-        test_loss  = np.empty((steps))
-        var_g      = np.empty((steps))
+        directory = 'VAE/'+dataset+'/'+str(cate)+'/'+filename
+        rec_ls = np.empty([3, steps*10])
 
-        batch = 100
-        d = 1.
-
-        c_ = np.asarray([1.]*100+[0.]*100)
-        c = c_
-        k = 0.
-
+        t = 1.
         for i in xrange(steps*1000):
             batch_ = np.reshape(random.sample(data_train, batch), [batch,-1])
-            batch_ = (np.random.uniform(0.,1.,[batch,784])<batch_).astype(float)
-            _, res = sess.run([train,loss],{x:batch_, tau:t, lr:_lr, cc:c, kk:k, dd:d})
-            
+            if not sta:
+                batch_ = (np.random.uniform(0.,1.,[batch,dim])<batch_).astype(float)
+
+            dic = {x:batch_, tau:t, lr:_lr}
+            res = sess.run([loss, train, aa], dic)
+            if i%100==1:
+                rec_ls[0, i/100] = res[0]
+                rec_ls[2, i/100] = res[-1]
+                batch_ = np.reshape(random.sample(data_test, batch), [batch,-1])
+                dic_ = {x: batch_, tau:1e-3}
+                rec_ls[1, i/100]  = sess.run(loss,  dic_)
 
             if i%1000==1:
-                ind = i/1000 
-                train_loss[ind] = res
-                var_g[ind] = sess.run(vg,{x:batch_, tau:t, lr:_lr, cc:c, kk:k, dd:d})
-                batch_ = np.reshape(random.sample(data_val, batch), [batch,-1])
-                val_loss[ind]  = sess.run(loss,{x:batch_, tau:0.001, lr:_lr, cc:np.zeros([200]), kk:1.,dd:3.})
-                batch_ = np.reshape(random.sample(data_test, batch), [batch,-1])
-                test_loss[ind] = sess.run(loss,{x:batch_, tau:0.001, lr:_lr, cc:np.zeros([200]), kk:1.,dd:3.})
+                t = np.maximum(np.exp(-i*1e-5), 0.5)
 
+            if i==steps*100 or i==steps*500 or i==steps*900:
+                save_path = saver.save(sess, directory+"/"+str(i)+"_model.ckpt")
 
-                if filename[:2]=='MX':
-                    d = 3. - 2.*np.exp(-1e-5*para*i)
-                    k = 1. - np.exp(-6e-5*i)
-                    c = np.exp(-3e-5*i)*c_
-
-                else:
-                    t = np.maximum(np.exp(-3e-5*i),0.5)
-
-
-        directory = 'VAE/'+dsfd+'/'+filename
         if not os.path.exists(directory):
             os.makedirs(directory)
-        np.save(directory+'/loss_rec', [train_loss, val_loss, test_loss, var_g])
+        np.save(directory+'/loss_rec', rec_ls)
         save_path = saver.save(sess, directory+"/model.ckpt")
 
+discrete = True
+loss, esti = nets(perc_rm, discrete)
+opt  = tf.train.AdamOptimizer(learning_rate=lr)
+grad = update_grad(opt, slim.get_variables(), discrete, loss, esti)
+train= opt.apply_gradients(grad)
+aa = esti[-1]
 
 
-
-loss, vl, _ = nets(mse)
-vg = [jacobian(vl, slim.get_model_variables()[z]) for z in range(4)]
-vg = [tf.reduce_sum(tf.square(z-tf.reduce_mean(z,0))) for z in vg]
-vg = tf.reduce_sum(vg) / 100. / (784*400+400+400*200+200) 
-train=tf.train.AdamOptimizer(learning_rate=lr).minimize(loss, var_list=slim.get_model_variables())
-
-
-
-for q1 in ['M','O']:
-#    for q2 in ['200_0_0','100_100_0','0_200_0',
-#               '100_0_100','0_0_200',
-#               '50_75_75','100_50_50','150_25_25',
-#               '75_50_75','50_100_50','25_150_25']:
-#        q3 = str.split(q2,'_')
-#        fit_model('MX1e-3_'+q2, 1e-3, .1, q1, np.asarray([1]*int(q3[0])+[0]*int(q3[1])+[-1]*int(q3[2])))
-
- #       for q3 in [3.,7.]:
-#            fit_model('MX1e-3_'+str(q3), 1e-3, .1, q1, q3)
-    fit_model('GB1e-3', 1e-3, 1., q1)
-
+for learning_rate in [3e-4]:
+    for cate in [k]:
+        fit_model('pc_rm3_.001_1_'+str(learning_rate),
+                  itr, learning_rate, cate, 'MNIST', True)
+        for dataset in ['OMNIGLOT','dy_MNIST']:
+            fit_model('pc_rm3_.001_1_'+str(learning_rate),
+                      itr, learning_rate, cate, dataset, False)
 
